@@ -120,18 +120,14 @@ import tkinter as tk
 
 
 if __name__ == "__main__":
+    # get vocabulary and likely meanings
     root = tk.Tk()
     confirm_selection()
     copy_information()
     information = root.clipboard_get()
     input_text = information
-    # parser = GingerIt()
-    # from nltk.tokenize import sent_tokenize
-    # [parser.parse(x) for x in ["Cause you re a sky"]]
     from nltk.stem import WordNetLemmatizer
     
-
-
     lemmatizer = WordNetLemmatizer()
 
 

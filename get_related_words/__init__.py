@@ -1,11 +1,56 @@
 import pandas as pd
 from nltk.corpus import wordnet as wn
+from nltk.corpus import stopwords
 import pyautogui
 import nltk
 import pickle
 
+from nltk.stem import WordNetLemmatizer
+
+stop_words = list (stopwords.words('english')) 
+
+lemmatizer = WordNetLemmatizer()
+
+def get_and_sort_words_for_best_related_words(meanings,word,lowest_frequency):
+    # meanings = related_df["meanings"].to_list()
+    related_words = pd.DataFrame([[x] + x.name().rsplit(".",2) for x in meanings],columns=["meaning","word","pos","value"])
+    related_words["lemma_naming"] = related_words["meaning"].apply(lambda x: [y.name() for y in x.lemmas()])
+    related_words["has_same_word"] = related_words["lemma_naming"].apply(lambda x: True in [word in y for y in x])
+    related_words = related_words.explode("lemma_naming")
+    related_words["frequency_ranking"] = related_words["lemma_naming"].apply(find_frequency_ranking)
+    related_words = related_words[related_words["frequency_ranking"] > 0]
+    related_words = related_words[related_words["word"] != word]
+    pos_preferences = {"n": 0, "s": 5, "v": 3, "a": 2, "r": 4}
+    related_words = related_words.sort_values(by=["value","frequency_ranking","pos"],key=lambda x: sorting_function_v2(x,pos_preferences))
+    related_words_to_return = []
+    for word in related_words["lemma_naming"]:
+        if word not in related_words_to_return:
+            related_words_to_return.append(word)
+    return related_words_to_return
+
+def find_frequency_ranking(word):
+    """This is meant to find the most unusual words with
+    high numbers, but to ignore anything with punctuation
+    that is much more common."""
+    output = 100000 # bigger than any in the brown corpus 
+    if word != None and word.isalpha():
+        word = lemmatizer.lemmatize(word.lower())
+        try:
+            output = lemmas_ranked.index(word)
+        except:
+            pass
+    else:
+        output = 0 # insignificant
+    return output
+
+
+testing = pd.DataFrame(["04","02",1])
 def sorting_function(x,pos_preferences):
     x = x.map(pos_preferences)
+    return x
+
+def sorting_function_v2(x,pos_preferences):
+    x = x.apply(lambda x: x if str(type(x)) != "<class 'str'>" else int(x) if x.isnumeric() else pos_preferences[x])
     return x
 
 def find_definitions_and_ranking_them_by_preference(word,part_of_speech=None):
@@ -38,10 +83,12 @@ def sort_meanings_for_best_related_words(meanings):
     related_words = related_words.sort_values(by=["value","pos"],key=lambda x: sorting_function(x,pos_preferences))
     return related_words["meaning"].to_list()
 
+
+
 def get_related_words_from_definition(meaning):
     definition = meaning.definition()
-    words = [w for w in word_tokenize(definition) if w not in stop_words]
-    word_df = pd.DataFrame(pos_tag(words))
+    words = [w for w in nltk.tokenize.word_tokenize(definition) if w not in stop_words]
+    word_df = pd.DataFrame(nltk.tag.pos_tag(words))
     if not word_df.empty:
         word_df["pos"] = word_df[1].apply(lambda x: get_more_common_part_of_speech(x))
         word_df["meanings"] = word_df[0].apply(lambda x: wn.synsets(x))
@@ -86,13 +133,15 @@ def get_specific_input(text="Yes/No",options=["Yes","No"]):
                 + "\n")
 
 
-def get_related_words(meaning):
+def get_related_words(meaning,word=None,lowest_frequency=500):
     related_words = []
-    word = meaning.lemmas()[0].name()
+    # word = "Superman"
+    if word == None:
+        word = meaning.lemmas()[0].name()
     related_everything = []
     for pair in [
             [meaning.in_topic_domains,"in_topic_domains"],
-            [meaning.in_usage_domains,"in_usage_domains"],
+            # [meaning.in_usage_domains,"in_usage_domains"],
             [meaning.substance_holonyms,"substance_holonyms"],
             [meaning.substance_meronyms,"substance_meronyms"],
             [meaning.instance_hypernyms,"instance_hypernyms"],
@@ -108,48 +157,49 @@ def get_related_words(meaning):
             [meaning.topic_domains,"topic_domains"],
             [meaning.usage_domains,"usage_domains"]
             ]:
-        related_everything = add_an_item(pair[0],pair[1],related_everything)
+        related_everything.append([pair[0],pair[1]])
 
     lemma_names = meaning.lemma_names()
-    current_word_name = meaning.lemmas()[0].name()
-    if current_word_name in lemma_names:
-        lemma_names.remove(current_word_name)
-    related_everything += [["synonyms",lemma_names]]
+    if word in lemma_names:
+        lemma_names.remove(word)
+
+    related_everything += [["synonym",wn.synsets(lemma_name)] for lemma_name in lemma_names]
+
+    related_everything += [["mentioned_in_definition",[meaning]] for meaning in get_related_words_from_definition(meaning)]
+
     related_everything = [x for x in related_everything if len(x[1]) > 0]
+    # related_everything[0]
     related_df = pd.DataFrame(related_everything)
+    if len(related_df.columns) == 3:
+        related_df.columns = ["mystery","type_of_relationship","meanings"]    
+        related_df = related_df[related_df["mystery"].apply(lambda x: str(type(x)) == "<class 'str'>")]
+        related_df = related_df.drop("meanings",axis=1)
     related_df.columns = ["type_of_relationship","meanings"]
+    
     related_df = related_df.explode("meanings")
     
-    related_df["lemma_naming"] = related_df["meanings"].apply(lambda x: [y.name() for y in x.lemmas()])
-    related_df["has_same_word"] = related_df["lemma_naming"].apply(lambda x: True in [word in y for y in x])
-    #doesn't have the same word
-    related_words.extend(related_df[related_df["has_same_word"] == False]["meanings"].to_list())
-    if len(related_words) >= 3:
-        return related_words
-    else:
-        related_df = related_df[related_df["has_same_word"]]
-        related_df["meanings"] = related_df["lemma_naming"].apply(lambda x: [wn.synsets(y.replace(word,"").replace("_"," ").strip()) for y in x if word in y])
-        for i, row in related_df[related_df["meanings"].apply(lambda x: True not in [True for y in x if len(y) > 0])].iterrows():
-            related_df.at[i,"meanings"].extend(get_related_words_from_definition(
-                wn.synsets(row["lemma_naming"][0])[0]))
-        related_df["meanings"] = related_df["meanings"].apply(lambda x: list(filter(lambda y: y, x)))
-        related_df["meanings"] = related_df["meanings"].apply(lambda x: x[0] if str(type(x[0])) == "<class 'list'>" else x)
-        related_df["meanings"] = related_df["meanings"].apply(lambda x: x[0])
-        return sort_meanings_for_best_related_words(related_df["meanings"])
-
-        
+    return get_and_sort_words_for_best_related_words(related_df["meanings"].to_list(),word,1000)  
 
 
 
 if __name__ == "__main__":
-    unique_selected_words_df = pd.read_pickle("unique_selected_words.pkl")
-    unique_selected_words_df["pos"] = unique_selected_words_df["part_of_speech"].apply(get_more_common_part_of_speech)
-    unique_selected_words_df["suggested_possible"] = unique_selected_words_df.apply(
-            lambda x: find_definitions_and_ranking_them_by_preference(x["original_word"],part_of_speech=x["pos"]),axis=1)
+    pass
+    # unique_selected_words_df = pd.read_pickle("unique_selected_words.pkl")
+    # unique_selected_words_df["pos"] = unique_selected_words_df["part_of_speech"].apply(get_more_common_part_of_speech)
+    # unique_selected_words_df["suggested_possible"] = unique_selected_words_df.apply(
+    #         lambda x: find_definitions_and_ranking_them_by_preference(x["original_word"],part_of_speech=x["pos"]),axis=1)
 
-    unique_selected_words_df["one_meaning_used"] = unique_selected_words_df["suggested_possible"].apply(lambda x: x[0] if len(x) > 0 else None)
+    # unique_selected_words_df["one_meaning_used"] = unique_selected_words_df["suggested_possible"].apply(lambda x: x[0] if len(x) > 0 else None)
     
-    unique_selected_words_df["one_meaning_used"].apply(lambda x: get_related_words_from_definition(x) if x != None else None)
+    # for i, row in unique_selected_words_df.iterrows():
+    #     meaning = row["one_meaning_used"]
+    #     if str(meaning) != "None":
+    #         print(meaning)
+            
+    #         print(get_related_words(meaning,word=row["original_word"]))
+    #     print(i, )
+    #     [0:1].apply(lambda x: get_related_words(x) if str(x) != "None" else None)
+    
     
 
 
